@@ -17,12 +17,13 @@ const Comment = require("./models/comment");
 // создаем приложение Express.js
 const app = express();
 
+app.use(cookieParser());
 // middleware для парсинга JSON
 app.use(bodyParser.json());
 // middleware для проверки авторизации
 const auth = (req, res, next) => {
     // проверяем наличие заголовка Authorization в запросе
-    const token = req.headers.authorization;
+    const token = req.cookies.jwt;
     if (!token) {
         return res
             .status(401)
@@ -49,6 +50,7 @@ app.post("/api/users", async (req, res) => {
         const token = jwt.sign({ user: user }, 'process.env.JWT_SECRET', {
             expiresIn: "1h",
         });
+        console.log(token)
         res.cookie("jwt", token, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
@@ -151,7 +153,7 @@ app.put("/api/articles/:id", auth, (req, res) => {
             if (!article) {
                 return res.status(404).json({ message: "Article not found" });
             }
-            if (article.author.id !== req.user.id) {
+            if (article.author !== req.user) {
                 return res.status(401).json({
                     message: "You are not authorized to edit this article",
                 });
@@ -176,7 +178,7 @@ app.delete("/api/articles/:id", auth, async (req, res) => {
         if (!article) {
             return res.status(404).json({ message: "Article not found" });
         }
-        if (article.author.id !== req.user.id) {
+        if (article.author !== req.user) {
             return res.status(401).json({
                 message: "You are not authorized to delete this article",
             });
@@ -197,7 +199,7 @@ app.post("/api/articles/:id/comments", auth, async (req, res) => {
         if (!article) {
             return res.status(404).json({ message: "Article not found" });
         }
-        const comment = new Comment({ content, author: req.user, article });
+        const comment = new Comment({ content, author: req.user.id, article });
         article.comments.push(comment);
         await article.save();
         res.json({ comment });
