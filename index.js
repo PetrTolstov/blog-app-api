@@ -1,7 +1,8 @@
 const express = require("express");
 const mongoose = require("mongoose");
 const bodyParser = require("body-parser");
-
+const jwt = require("jsonwebtoken");
+const cookieParser = require("cookie-parser");
 // подключаемся к базе данных
 mongoose.connect(
     "mongodb+srv://test:test@cluster0.8hvk9wi.mongodb.net/blog-app?retryWrites=true&w=majority"
@@ -18,7 +19,6 @@ const app = express();
 
 // middleware для парсинга JSON
 app.use(bodyParser.json());
-
 // middleware для проверки авторизации
 const auth = (req, res, next) => {
     // проверяем наличие заголовка Authorization в запросе
@@ -28,10 +28,15 @@ const auth = (req, res, next) => {
             .status(401)
             .json({ message: "Authorization header is required" });
     }
-    // проверяем валидность токена и сохраняем текущего пользователя в объекте запроса
-    // далее мы будем использовать req.user в других маршрутах для получения текущего пользователя
-    // или для проверки авторизации
-    next();
+    try {
+        // верифицируем токен и извлекаем данные пользователя
+        const decodedToken = jwt.verify(token, 'process.env.JWT_SECRET');
+        req.user = decodedToken.user;
+        next();
+    } catch (err) {
+        console.error(err);
+        res.status(401).json({ message: "Invalid token" });
+    }
 };
 
 // регистрация нового пользователя
@@ -40,6 +45,14 @@ app.post("/api/users", async (req, res) => {
         const { email, username, password } = req.body.user;
         const user = new User({ email, username, password });
         await user.save();
+        // генерируем JWT токен и сохраняем его в http-only cookie
+        const token = jwt.sign({ user: user }, 'process.env.JWT_SECRET', {
+            expiresIn: "1h",
+        });
+        res.cookie("jwt", token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+        });
         res.json({ user });
     } catch (err) {
         return res.status(422).json({ message: "User already exists" });
@@ -50,16 +63,27 @@ app.post("/api/users", async (req, res) => {
 app.post("/api/users/login", async (req, res) => {
     const { email, password } = req.body.user;
     try {
-      const user = await User.findOne({ email });
-      if (!user || !user.comparePassword(password)) {
-        return res.status(401).json({ message: "Invalid email or password" });
-      }
-      res.json({ user });
+        const user = await User.findOne({ email });
+        if (!user || !user.comparePassword(password)) {
+            return res
+                .status(401)
+                .json({ message: "Invalid email or password" });
+        }
+        // генерируем JWT токен и сохраняем его в http-only cookie
+        const token = jwt.sign({ user: user }, 'process.env.JWT_SECRET', {
+            expiresIn: "1h",
+        });
+        console.log(token)
+        res.cookie("jwt", token, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+        });
+        res.json({ user });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Internal Server Error" });
+        console.error(err);
+        res.status(500).json({ message: "Internal Server Error" });
     }
-  });
+});
 
 // получение текущего пользователя
 app.get("/api/user", auth, (req, res) => {
@@ -94,56 +118,56 @@ app.get("/api/articles", (req, res) => {
 
 // создание новой статьи
 app.post("/api/articles", auth, (req, res) => {
-    const { title, body } = req.body.article;
-    const article = new Article({ title, body, author: req.user });
-    
-    article.save()
-      .then(() => {
-        res.json({ article });
-      })
-      .catch((err) => {
-        res.status(422).json({ message: "Error creating article" });
-      });
-  });
+    const { title, content } = req.body.article;
+    const article = new Article({ title, content, author: req.user });
+
+    article
+        .save()
+        .then(() => {
+            res.json({ article });
+        })
+        .catch((err) => {
+            console.log(err)
+            res.status(422).json({ message: "Error creating article" });
+        });
+});
 
 // получение одной статьи
 app.get("/api/articles/:id", (req, res) => {
     Article.findById(req.params.id)
-      .then((article) => {
-        res.json({ article });
-      })
-      .catch((err) => {
-        throw err;
-      });
-  });
-  
+        .then((article) => {
+            res.json({ article });
+        })
+        .catch((err) => {
+            throw err;
+        });
+});
 
 // обновление статьи
 app.put("/api/articles/:id", auth, (req, res) => {
-    const { title, body } = req.body.article;
+    const { title, content } = req.body.article;
     Article.findById(req.params.id)
-      .then((article) => {
-        if (!article) {
-          return res.status(404).json({ message: "Article not found" });
-        }
-        if (article.author.id !== req.user.id) {
-          return res.status(401).json({
-            message: "You are not authorized to edit this article",
-          });
-        }
-        article.title = title || article.title;
-        article.body = body || article.body;
-        return article.save();
-      })
-      .then((article) => {
-        res.json({ article });
-      })
-      .catch((err) => {
-        console.error(err);
-        res.status(422).json({ message: "Error updating article" });
-      });
-  });
-  
+        .then((article) => {
+            if (!article) {
+                return res.status(404).json({ message: "Article not found" });
+            }
+            if (article.author.id !== req.user.id) {
+                return res.status(401).json({
+                    message: "You are not authorized to edit this article",
+                });
+            }
+            article.title = title || article.title;
+            article.content = content || article.content;
+            return article.save();
+        })
+        .then((article) => {
+            res.json({ article });
+        })
+        .catch((err) => {
+            console.error(err);
+            res.status(422).json({ message: "Error updating article" });
+        });
+});
 
 // удаление статьи
 app.delete("/api/articles/:id", auth, async (req, res) => {
@@ -165,17 +189,15 @@ app.delete("/api/articles/:id", auth, async (req, res) => {
     }
 });
 
-
-
 // создание нового комментария
 app.post("/api/articles/:id/comments", auth, async (req, res) => {
     try {
-        const { body } = req.body.comment;
+        const { content } = req.body.comment;
         const article = await Article.findById(req.params.id);
         if (!article) {
             return res.status(404).json({ message: "Article not found" });
         }
-        const comment = new Comment({ body, author: req.user });
+        const comment = new Comment({ content, author: req.user, article });
         article.comments.push(comment);
         await article.save();
         res.json({ comment });
@@ -187,62 +209,59 @@ app.post("/api/articles/:id/comments", auth, async (req, res) => {
 // получение списка комментариев к статье
 app.get("/api/articles/:id/comments", async (req, res) => {
     try {
-      const article = await Article.findById(req.params.id);
-      if (!article) {
-        return res.status(404).json({ message: "Article not found" });
-      }
-      res.json({ comments: article.comments });
+        const article = await Article.findById(req.params.id);
+        if (!article) {
+            return res.status(404).json({ message: "Article not found" });
+        }
+        res.json({ comments: article.comments });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Internal server error" });
+        console.error(err);
+        res.status(500).json({ message: "Internal server error" });
     }
-  });
-  
+});
 
 // получение одного комментария
 app.get("/api/articles/:id/comments/:commentId", async (req, res) => {
     try {
-      const article = await Article.findById(req.params.id);
-      if (!article) {
-        return res.status(404).json({ message: "Article not found" });
-      }
-      const comment = article.comments.id(req.params.commentId);
-      if (!comment) {
-        return res.status(404).json({ message: "Comment not found" });
-      }
-      res.json({ comment });
+        const article = await Article.findById(req.params.id);
+        if (!article) {
+            return res.status(404).json({ message: "Article not found" });
+        }
+        const comment = article.comments.id(req.params.commentId);
+        if (!comment) {
+            return res.status(404).json({ message: "Comment not found" });
+        }
+        res.json({ comment });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ message: "Server Error" });
+        console.error(err);
+        res.status(500).json({ message: "Server Error" });
     }
-  });
-  
+});
 
 // обновление комментария
 app.put("/api/articles/:id/comments/:commentId", auth, async (req, res) => {
     try {
-      const { body } = req.body.comment;
-      const article = await Article.findById(req.params.id);
-      if (!article) {
-        return res.status(404).json({ message: "Article not found" });
-      }
-      const comment = article.comments.id(req.params.commentId);
-      if (!comment) {
-        return res.status(404).json({ message: "Comment not found" });
-      }
-      if (comment.author.id !== req.user.id) {
-        return res.status(401).json({
-          message: "You are not authorized to edit this comment",
-        });
-      }
-      comment.body = body || comment.body;
-      await article.save();
-      res.json({ comment });
+        const { content } = req.body.comment;
+        const article = await Article.findById(req.params.id);
+        if (!article) {
+            return res.status(404).json({ message: "Article not found" });
+        }
+        const comment = article.comments.id(req.params.commentId);
+        if (!comment) {
+            return res.status(404).json({ message: "Comment not found" });
+        }
+        if (comment.author.id !== req.user.id) {
+            return res.status(401).json({
+                message: "You are not authorized to edit this comment",
+            });
+        }
+        comment.content = content || comment.content;
+        await article.save();
+        res.json({ comment });
     } catch (error) {
-      res.status(422).json({ message: "Error updating comment" });
+        res.status(422).json({ message: "Error updating comment" });
     }
-  });
-  
+});
 
 // удаление комментария
 app.delete("/api/comments/:id", auth, (req, res) => {
@@ -265,7 +284,6 @@ app.delete("/api/comments/:id", auth, (req, res) => {
             throw err;
         });
 });
-
 
 // запускаем сервер на порту 3000
 app.listen(3000, () => {
