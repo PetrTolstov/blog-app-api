@@ -8,7 +8,7 @@ mongoose.connect(
     "mongodb+srv://test:test@cluster0.8hvk9wi.mongodb.net/blog-app?retryWrites=true&w=majority"
 );
 
-const dbName = "blog-app";
+
 // создаем модели данных для таблиц articles, users и comments
 const Article = require("./models/article");
 const User = require("./models/user");
@@ -94,11 +94,13 @@ app.get("/api/user", auth, (req, res) => {
 
 // обновление данных пользователя
 app.put("/api/user", auth, (req, res) => {
-    const { email, username, password } = req.body.user;
+    const { email, username, password, bio, image } = req.body.user;
     const user = req.user;
     user.email = email || user.email;
     user.username = username || user.username;
     user.password = password || user.password;
+    user.username = bio || user.bio;
+    user.password = image || user.image;
     user.save((err) => {
         if (err) {
             return res.status(422).json({ message: "User already exists" });
